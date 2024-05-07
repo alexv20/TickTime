@@ -2,9 +2,9 @@ import { Prisma } from '@prisma/client';
 
 export type IToken = Prisma.TokenGetPayload<{}>;
 
-export type SaveTokenType = Omit<IToken, 'id'>;
+export type SaveTokenProps = Omit<IToken, 'id'>;
 
-export type TokenBodyType = {
+export type TokenBodyProps = {
   email: string;
   id: number;
   isActivated: boolean;

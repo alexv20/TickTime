@@ -1,4 +1,3 @@
-import { AuthData, IUser } from '../../types/user.types';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
@@ -6,21 +5,22 @@ import mailService from './mail.service';
 import tokenService from './token.service';
 import UserDto from '../../dtos/user.dto';
 import ApiError from '../../exceptions/apiError';
+import { AuthDataType, LoginDataType } from '../../types/auth.types';
+import { IUser } from '../../types/user.types';
 
 const prisma: PrismaClient = new PrismaClient();
 
 interface IAuthService {
-  registration(authData: AuthData): Promise<any>;
-  // login(authData: AuthData): Promise<any>;
-  // logout(userId: string): Promise<void>;
-  // activateAccount(activationLink: string): Promise<any>;
-  // refreshAccessToken(refreshToken: string): Promise<any>;
-  // getAllUsers(): Promise<any[]>;
+  registration(authData: AuthDataType): Promise<any>;
+  login(authData: LoginDataType): Promise<any>;
+  logout(refreshToken: string): Promise<void>;
+  activateAccount(activationLink: string): Promise<any>;
+  refreshTokens(refreshToken: string): Promise<any>;
 }
 
 class AuthService implements IAuthService {
   // Функция для регистрации
-  async registration({ email, password, name }: AuthData): Promise<any> {
+  async registration({ email, password, name }: AuthDataType): Promise<any> {
     const candidate = await prisma.user.findFirst({
       where: { email: email },
     });
@@ -57,14 +57,69 @@ class AuthService implements IAuthService {
     };
   }
 
-  // // Функция для входа в аккаунт
-  // async login(authData: AuthData): Promise<any> {}
-  //
-  // // Функция для выхода из аккаунта
-  // async logout(userId: string): Promise<void> {}
-  //
-  // // Функция для обновления access-токена
-  // async refreshAccessToken(refreshToken: string): Promise<any> {}
+  // Функция для входа в аккаунт
+  async login({ email, password }: LoginDataType): Promise<any> {
+    const user = await prisma.user.findFirst({
+      where: { email: email },
+    });
+
+    if (!user) {
+      throw ApiError.BadRequest('Пользователь с таким email не найден');
+    }
+
+    const isPassEquals = await bcrypt.compare(password, user.password);
+    if (!isPassEquals) {
+      throw ApiError.BadRequest('Неверный логин или пароль');
+    }
+
+    const userDto = new UserDto(user);
+    const tokens = await tokenService.generateToken({ ...userDto });
+    await tokenService.saveToken({
+      userId: userDto.id,
+      refreshToken: tokens.refreshToken,
+    });
+
+    return {
+      ...tokens,
+      user: userDto,
+    };
+  }
+
+  // Функция для выхода из аккаунта
+  async logout(refreshToken: string): Promise<void> {
+    return await tokenService.removeToken(refreshToken);
+  }
+
+  // Функция для обновления токенов
+  async refreshTokens(refreshToken: string): Promise<any> {
+    if (!refreshToken) {
+      throw ApiError.UnauthorizedError();
+    }
+
+    const userData = tokenService.validateRefreshToken(refreshToken);
+    const tokenFromDb = await tokenService.findToken(refreshToken);
+
+    if (!userData || !tokenFromDb) {
+      throw ApiError.UnauthorizedError();
+    }
+
+    const user = await prisma.user.findFirst({
+      where: {
+        id: tokenFromDb.userId,
+      },
+    });
+    const userDto = new UserDto(user!);
+    const tokens = await tokenService.generateToken({ ...userDto });
+    await tokenService.saveToken({
+      userId: userDto.id,
+      refreshToken: tokens.refreshToken,
+    });
+
+    return {
+      ...tokens,
+      user: userDto,
+    };
+  }
 
   // Функция для активации аккаунта
   async activateAccount(activationLink: string): Promise<any> {
@@ -87,9 +142,6 @@ class AuthService implements IAuthService {
       },
     });
   }
-
-  // // Функция для получения всех пользователей (для тестов)
-  // async getAllUsers(): Promise<any[]> {}
 }
 
 export default new AuthService();
